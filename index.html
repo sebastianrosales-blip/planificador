@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Planificador Nutricional</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; }
+        #root { width: 100%; min-height: 100vh; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 100; }
+        .modal-content { background: white; width: 100%; max-width: 500px; height: 100%; max-height: 100vh; box-shadow: 0 4px 6px rgba(0,0,0,0.1); overflow-y: auto; box-sizing: border-box; padding: 20px; }
+        @media (min-width: 768px) { .modal-content { border-radius: 10px; height: 90vh; } }
+        input, textarea { width: 100%; box-sizing: border-box; font-family: inherit; }
+        button { cursor: pointer; border: none; outline: none; font-family: inherit; }
+        .spinner { border: 4px solid rgba(0,0,0,0.1); width: 40px; height: 40px; border-radius: 50%; border-left-color: #007BFF; animation: spin 1s linear infinite; margin: 20px auto;}
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { createClient } = supabase;
+
+        // --- CONFIGURACIÓN SUPABASE ---
+        const supabaseUrl = 'https://gfxfgpaueizbsvhslvfh.supabase.co';
+        const supabaseKey = 'sb_publishable_Rxmh-0-9SmdQoshPKaq8s5g_AZcw_TgL'; // Tu clave real
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        const MEAL_TIMES = ["desayuno", "media_manana", "almuerzo", "media_tarde", "cena"];
+        const MEAL_LABELS = {
+            desayuno: "Desayuno", media_manana: "Media mañana", almuerzo: "Almuerzo", media_tarde: "Media tarde", cena: "Cena"
+        };
+        const SHOPPING_CATEGORIES = ["Carnes", "Pescados", "Lacteos", "Frutas", "Verduras", "Cereales", "Despensa", "Otros"];
+
+        const formatSpanishDate = (dateStr) => {
+            if (!dateStr) return '---';
+            const parts = dateStr.split('-');
+            const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+            const options = { weekday: 'long', day: 'numeric', month: 'long' };
+            let formatted = dateObj.toLocaleDateString('es-ES', options);
+            return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+        };
+
+        const callGemini = async (prompt) => {
+            const GEMINI_API_KEY = "AQ.Ab8RN6I4-p0LO_7MSk3rXN97_uIOhSLUsYbp1uNEz5msXJJEVg"; // ¡Pon aquí tu clave nueva de Gemini!
+            const body = {
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: "application/json" }
+            };
+            try {
+                let res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`, {
+                    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+                });
+                if (!res.ok) {
+                    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`, {
+                        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                if (!data.candidates || !data.candidates[0].content) throw new Error("La IA no devolvió contenido.");
+                let jsonStr = data.candidates[0].content.parts[0].text;
+                jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                return JSON.parse(jsonStr);
+            } catch (error) { throw error; }
+        };
+
+        // --- ESTILOS (Inline) ---
+        const styles = {
+            container: { flex: 1, backgroundColor: '#f5f5f5', paddingTop: 30 },
+            headerRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 20px', marginTop: 10 },
+            title: { fontSize: 22, fontWeight: 'bold', flex: 1 },
+            logoutBtn: { color: '#dc3545', fontWeight: 'bold', fontSize: 16, background: 'none' },
+            calendarContainer: { backgroundColor: 'white', margin: 10, borderRadius: 10, padding: 10, boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
+            calendarHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+            monthTitle: { fontSize: 18, fontWeight: 'bold', textTransform: 'capitalize' },
+            navArrow: { fontSize: 30, color: '#007BFF', padding: '0 15px', background: 'none' },
+            weekDays: { display: 'flex', flexDirection: 'row', marginBottom: 5 },
+            weekDayText: { flex: 1, textAlign: 'center', fontWeight: 'bold', color: 'gray' },
+            daysGrid: { display: 'flex', flexWrap: 'wrap' },
+            dayCell: { width: '14.28%', aspectRatio: '1', display: 'flex', justifyContent: 'center', alignItems: 'center' },
+            dayInner: { width: 36, height: 36, borderRadius: 18, display: 'flex', justifyContent: 'center', alignItems: 'center', border: '0px solid transparent' },
+            selectedDay: { backgroundColor: '#007BFF' },
+            rangeEndDay: { backgroundColor: '#0056b3' },
+            rangeDay: { backgroundColor: '#e0f0ff' },
+            markedDay: { border: '2px solid #007BFF' }, 
+            selectedDayText: { color: 'white', fontWeight: 'bold' },
+            markedDayText: { color: '#007BFF', fontWeight: 'bold' },
+            subtitle: { fontSize: 18, fontWeight: 'bold', margin: '10px 0', textAlign: 'center' },
+            dayContainer: { padding: 15, backgroundColor: 'white', margin: 10, borderRadius: 10, boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
+            mealTimeBox: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderBottom: '1px solid #eee' },
+            mealTimeText: { fontWeight: 'bold', fontSize: 16 },
+            mealRightSide: { display: 'flex', alignItems: 'center', flex: 1, justifyContent: 'flex-end' },
+            mealNameBtn: { flexShrink: 1, padding: 5, background: 'none' },
+            mealNameText: { color: '#007BFF', fontSize: 16, textAlign: 'right' },
+            removeBtn: { marginLeft: 10, backgroundColor: '#dc3545', width: 24, height: 24, borderRadius: 12, display: 'flex', justifyContent: 'center', alignItems: 'center', color: 'white', fontWeight: 'bold' },
+            listItem: { padding: 15, borderBottom: '1px solid #eee', background: 'none', width: '100%', textAlign: 'left' },
+            listItemText: { fontSize: 16 },
+            sectionTitle: { fontSize: 16, fontWeight: 'bold', marginTop: 15, marginBottom: 5 },
+            input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 5, padding: 10, marginBottom: 10, fontSize: 16 },
+            modeContainer: { display: 'flex', justifyContent: 'space-between', marginBottom: 15 },
+            modeBtn: { flex: 1, borderWidth: 1, borderColor: '#ccc', borderRadius: 5, padding: 10, alignItems: 'center', margin: '0 2px', background: 'white' },
+            modeBtnActive: { backgroundColor: '#007BFF', borderColor: '#007BFF', color: 'white', fontWeight: 'bold' },
+            searchContainer: { display: 'flex', alignItems: 'center', marginBottom: 10 },
+            labeledRow: { display: 'flex', alignItems: 'center', marginBottom: 10, justifyContent: 'space-between' },
+            labelText: { fontWeight: 'bold', fontSize: 14, color: '#333', flex: 1 },
+            labeledInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 5, padding: 8, flex: 1, margin: '0 5px' },
+            timesContainer: { display: 'flex', flexWrap: 'wrap', marginBottom: 10 },
+            timePill: { borderWidth: 1, borderColor: '#007BFF', borderRadius: 20, padding: '8px 15px', margin: 5, background: 'white' },
+            timePillActive: { backgroundColor: '#007BFF', color: 'white' },
+            btnMain: { backgroundColor: '#007BFF', padding: 15, borderRadius: 5, alignItems: 'center', marginTop: 10, color: 'white', fontWeight: 'bold', width: '100%' },
+            btnWhatsapp: { backgroundColor: '#25D366', padding: 15, borderRadius: 5, alignItems: 'center', marginTop: 10, color: 'white', fontWeight: 'bold', width: '100%' },
+            btnSecondary: { backgroundColor: '#6c757d', padding: 15, borderRadius: 5, alignItems: 'center', marginTop: 10, color: 'white', fontWeight: 'bold', width: '100%' },
+            provItem: { display: 'flex', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #eee', background: 'none', width: '100%', textAlign: 'left' },
+            checkbox: { width: 20, height: 20, borderWidth: 2, borderColor: '#007BFF', borderRadius: 4, marginRight: 10 },
+            checkboxChecked: { backgroundColor: '#007BFF' },
+            provText: { fontSize: 16, flex: 1 },
+            provTextUnselected: { color: '#999', textDecoration: 'line-through' },
+            defCat: { marginBottom: 15 },
+            defCatTitle: { fontSize: 16, fontWeight: 'bold', backgroundColor: '#f0f0f0', padding: 8, borderRadius: 5 },
+            defItem: { padding: '10px 0 10px 10px', background: 'none', width: '100%', textAlign: 'left' },
+            defText: { fontSize: 16 },
+            defTextBought: { color: '#999', textDecoration: 'line-through' },
+            authContainer: { height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 30, backgroundColor: '#f5f5f5' },
+            authTitle: { fontSize: 28, fontWeight: 'bold', textAlign: 'center', marginBottom: 10, color: '#007BFF' },
+            authSubtitle: { fontSize: 16, textAlign: 'center', marginBottom: 40, color: '#555' },
+            googleBtn: { display: 'flex', alignItems: 'center', backgroundColor: 'white', padding: '12px 20px', borderRadius: 30, border: '1px solid #ccc', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
+            googleIcon: { width: 24, height: 24, marginRight: 10 }
+        };
+
+        // --- PANTALLA LOGIN ---
+        const AuthScreen = () => {
+            const [loading, setLoading] = useState(false);
+            const handleGoogleLogin = async () => {
+                setLoading(true);
+                try {
+                    const { error } = await supabase.auth.signInWithOAuth({
+                        provider: 'google',
+                        options: { redirectTo: window.location.origin }
+                    });
+                    if (error) throw error;
+                } catch (error) { alert("Error: " + error.message); setLoading(false); }
+            };
+            return (
+                <div style={styles.authContainer}>
+                    <h1 style={styles.authTitle}>PLANIFICADOR NUTRICIONAL</h1>
+                    <p style={styles.authSubtitle}>Inicia sesión para acceder a tus recetas y calendario</p>
+                    <button style={styles.googleBtn} onClick={handleGoogleLogin} disabled={loading}>
+                        {loading ? <div className="spinner" style={{width:24, height:24, borderWidth:3}}></div> : (
+                            <>
+                                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/2048px-Google_%22G%22_logo.svg.png" style={styles.googleIcon} alt="Google" />
+                                <span style={{fontSize: 16, fontWeight: 'bold', color: '#333'}}>Continuar con Google</span>
+                            </>
+                        )}
+                    </button>
+                </div>
+            );
+        };
+
+        // --- APP PRINCIPAL ---
+        function App() {
+            const [session, setSession] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                supabase.auth.getSession().then(({ data: { session } }) => {
+                    setSession(session); setLoading(false);
+                });
+                const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+                return () => listener.subscription.unsubscribe();
+            }, []);
+
+            if (loading) return <div className="spinner"></div>;
+            if (!session) return <AuthScreen />;
+            return <MainApp user={session.user} />;
+        }
+
+        function MainApp({ user }) {
+            const [selectedDate, setSelectedDate] = useState('');
+            const [markedDates, setMarkedDates] = useState({});
+            const [dayPlan, setDayPlan] = useState({});
+            const [mealsDB, setMealsDB] = useState([]);
+            const [currentMonth, setCurrentMonth] = useState(new Date());
+            const [showMealSelector, setShowMealSelector] = useState(false);
+            const [showMealInfo, setShowMealInfo] = useState(false);
+            const [showAddMeal, setShowAddMeal] = useState(false);
+            const [showShoppingList, setShowShoppingList] = useState(false);
+            const [activeMealTime, setActiveMealTime] = useState('');
+            const [currentMealInfo, setCurrentMealInfo] = useState(null);
+            const [rangeStart, setRangeStart] = useState('');
+            const [rangeEnd, setRangeEnd] = useState('');
+            const [isGeneratingList, setIsGeneratingList] = useState(false);
+            const [provisionalList, setProvisionalList] = useState([]);
+            const [definitiveList, setDefinitiveList] = useState({});
+            const [shopMonth, setShopMonth] = useState(new Date());
+            const [shopMarks, setShopMarks] = useState({});
+
+            useEffect(() => {
+                const fetchMeals = async () => { const { data } = await supabase.from('meals').select('*'); if (data) setMealsDB(data); };
+                fetchMeals();
+            }, []);
+
+            useEffect(() => {
+                const fetchMonthPlans = async () => {
+                    const y = currentMonth.getFullYear(), m = currentMonth.getMonth();
+                    const lastDay = new Date(y, m + 1, 0).getDate();
+                    const startDate = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+                    const endDate = `${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+                    const { data } = await supabase.from('planner').select('*').gte('date', startDate).lte('date', endDate);
+                    if (data) {
+                        setMarkedDates(prev => {
+                            const newMarks = {};
+                            Object.keys(prev).forEach(k => newMarks[k] = { marked: false, selected: k === selectedDate });
+                            data.forEach(item => {
+                                if (MEAL_TIMES.some(t => item[t])) newMarks[item.date] = { marked: true, selected: item.date === selectedDate };
+                            });
+                            return newMarks;
+                        });
+                    }
+                };
+                fetchMonthPlans();
+            }, [currentMonth, selectedDate]);
+
+            const onDayPress = async (day) => {
+                setSelectedDate(day);
+                const { data } = await supabase.from('planner').select('*').eq('date', day).single();
+                setMarkedDates(prev => {
+                    const newMarks = {};
+                    Object.keys(prev).forEach(k => newMarks[k] = { marked: prev[k]?.marked, selected: false });
+                    newMarks[day] = { marked: data ? MEAL_TIMES.some(t => data[t]) : false, selected: true };
+                    return newMarks;
+                });
+                setDayPlan(data || {});
+            };
+
+            const saveMealAndAssign = async (newMeal, selectedTimes) => {
+                try {
+                    const { data: mealData, error: mealError } = await supabase.from('meals').insert(newMeal).select();
+                    if (mealError) { alert("Error: " + mealError.message); return false; }
+                    setMealsDB(prev => [...prev, mealData[0]]);
+                    let updatedPlan = { ...dayPlan, date: selectedDate };
+                    selectedTimes.forEach(t => updatedPlan[t] = mealData[0].id);
+                    const { error: planError } = await supabase.from('planner').upsert(updatedPlan);
+                    if (planError) { alert("Error: " + planError.message); return false; }
+                    setDayPlan(updatedPlan);
+                    setMarkedDates(prev => ({ ...prev, [selectedDate]: { ...prev[selectedDate], selected: true, marked: true } }));
+                    return true;
+                } catch (e) { alert("Error: " + e.message); return false; }
+            };
+
+            const removeMealFromDay = async (time) => {
+                let updatedPlan = { ...dayPlan, [time]: null };
+                const { error } = await supabase.from('planner').upsert(updatedPlan);
+                if (error) { alert("Error: " + error.message); }
+                else {
+                    setDayPlan(updatedPlan);
+                    setMarkedDates(prev => ({ ...prev, [selectedDate]: { ...prev[selectedDate], marked: MEAL_TIMES.some(t => updatedPlan[t]) } }));
+                }
+            };
+
+            const generateShoppingList = async () => {
+                if (!rangeStart || !rangeEnd) { alert("Selecciona un rango."); return; }
+                setIsGeneratingList(true); setProvisionalList([]); setDefinitiveList({});
+                const { data: planData } = await supabase.from('planner').select('*').gte('date', rangeStart).lte('date', rangeEnd);
+                const rawIngredients = [];
+                (planData || []).forEach(day => MEAL_TIMES.forEach(time => {
+                    if (day[time]) {
+                        const meal = mealsDB.find(m => m.id === day[time]);
+                        if (meal && meal.ingredients) meal.ingredients.forEach(ing => rawIngredients.push({ name: ing.name, quantity: parseFloat(ing.quantity) || 0, unit: ing.unit || "g" }));
+                    }
+                }));
+                if (rawIngredients.length === 0) { alert("No hay comidas planificadas."); setIsGeneratingList(false); return; }
+                try {
+                    const prompt = `Eres un asistente de supermercado. Lista de ingredientes: ${JSON.stringify(rawIngredients)}. 1. Consolida duplicados (plurales/sinónimos). 2. Suma cantidades. 3. Clasifica en: ["Carnes", "Pescados", "Lacteos", "Frutas", "Verduras", "Cereales", "Despensa", "Otros"]. 4. Devuelve array JSON: [{"name":"Tomate", "quantity":300, "unit":"g", "category":"Verduras"}]`;
+                    const parsedArray = await callGemini(prompt);
+                    setProvisionalList(parsedArray.map(item => ({ ...item, selected: true })));
+                } catch (e) { alert("Error IA."); }
+                setIsGeneratingList(false);
+            };
+
+            const createDefinitiveList = () => {
+                const finalList = {};
+                provisionalList.filter(i => i.selected).forEach(item => {
+                    const cat = SHOPPING_CATEGORIES.includes(item.category) ? item.category : "Otros";
+                    if (!finalList[cat]) finalList[cat] = [];
+                    finalList[cat].push({ ...item, bought: false });
+                });
+                setDefinitiveList(finalList);
+            };
+
+            const toggleProvisionalItem = (index) => setProvisionalList(prev => prev.map((item, i) => i === index ? { ...item, selected: !item.selected } : item));
+            const toggleBoughtItem = (cat, index) => setDefinitiveList(prev => { const n = { ...prev }; n[cat][index].bought = !n[cat][index].bought; return n; });
+
+            const sendWhatsApp = () => {
+                let msg = "🛒 *Lista de la Compra*\n\n";
+                Object.entries(definitiveList).forEach(([cat, items]) => { if (items.length > 0) { msg += `*${cat}:*\n`; items.forEach(i => msg += `- ${i.name}: ${i.quantity} ${i.unit}\n`); msg += `\n`; } });
+                window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+            };
+
+            const exportListFile = () => {
+                let textContent = "LISTA DE LA COMPRA\n\n";
+                Object.entries(definitiveList).forEach(([cat, items]) => { if (items.length > 0) { textContent += `${cat.toUpperCase()}\n`; items.forEach(i => textContent += `[ ] ${i.name}: ${i.quantity} ${i.unit}\n`); textContent += "\n"; } });
+                const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = 'lista_compra.txt'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+            };
+
+            const renderCalendar = (monthDate, setMonthDate, marks, onDayCallback, rangeS = '', rangeE = '') => {
+                const y = monthDate.getFullYear(), m = monthDate.getMonth();
+                const firstDay = new Date(y, m, 1).getDay();
+                const daysInMonth = new Date(y, m + 1, 0).getDate();
+                const emptyDays = (firstDay === 0) ? 6 : firstDay - 1;
+                const daysArray = [];
+                for (let i = 0; i < emptyDays; i++) daysArray.push(`empty-${i}`);
+                for (let i = 1; i <= daysInMonth; i++) daysArray.push(`${y}-${String(m + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`);
+
+                return (
+                    <div style={styles.calendarContainer}>
+                        <div style={styles.calendarHeader}>
+                            <button style={styles.navArrow} onClick={() => setMonthDate(new Date(y, m - 1, 1))}>‹</button>
+                            <span style={styles.monthTitle}>{monthDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</span>
+                            <button style={styles.navArrow} onClick={() => setMonthDate(new Date(y, m + 1, 1))}>›</button>
+                        </div>
+                        <div style={styles.weekDays}>{['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => <span key={d} style={styles.weekDayText}>{d}</span>)}</div>
+                        <div style={styles.daysGrid}>
+                            {daysArray.map(dayStr => {
+                                if (dayStr.startsWith('empty-')) return <div key={dayStr} style={styles.dayCell}></div>;
+                                const dayNum = parseInt(dayStr.split('-')[2]);
+                                const isSelected = marks[dayStr]?.selected, isMarked = marks[dayStr]?.marked;
+                                const isRangeStart = dayStr === rangeS, isRangeEnd = dayStr === rangeE;
+                                const isInRange = rangeS && rangeEnd && new Date(dayStr) > new Date(rangeS) && new Date(dayStr) < new Date(rangeE);
+                                return (
+                                    <div key={dayStr} style={styles.dayCell}>
+                                        <button onClick={() => onDayCallback(dayStr)} style={{ ...styles.dayInner, ...(isSelected && styles.selectedDay), ...((isRangeStart || isRangeEnd) && styles.rangeEndDay), ...(isInRange && styles.rangeDay), ...(!isSelected && isMarked && !isInRange && !(isRangeStart || isRangeEnd) && styles.markedDay), background: 'none', cursor: 'pointer' }}>
+                                            <span style={(isSelected || isRangeStart || isRangeEnd || isInRange) ? styles.selectedDayText : (isMarked ? styles.markedDayText : null)}>{dayNum}</span>
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            };
+
+            const onShopDayPress = (day) => {
+                let ns = rangeStart, ne = rangeEnd;
+                if (!rangeStart || (rangeStart && rangeEnd)) { ns = day; ne = ''; } 
+                else if (rangeStart && !rangeEnd) { if (new Date(day) >= new Date(rangeStart)) ne = day; else ns = day; }
+                setRangeStart(ns); setRangeEnd(ne); setProvisionalList([]); setDefinitiveList({});
+                setShopMarks(prev => {
+                    const n = {}; Object.keys(prev).forEach(k => n[k] = { marked: prev[k]?.marked, selected: false });
+                    if (ns) n[ns] = { ...n[ns], selected: true }; if (ne) n[ne] = { ...n[ne], selected: true }; return n;
+                });
+            };
+
+            useEffect(() => {
+                const fetchShopMonthPlans = async () => {
+                    const y = shopMonth.getFullYear(), m = shopMonth.getMonth(), lastDay = new Date(y, m + 1, 0).getDate();
+                    const sD = `${y}-${String(m + 1).padStart(2, '0')}-01`, eD = `${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+                    const { data } = await supabase.from('planner').select('*').gte('date', sD).lte('date', eD);
+                    if (data) {
+                        setShopMarks(prev => {
+                            const n = {}; Object.keys(prev).forEach(k => n[k] = { marked: false, selected: k === rangeStart || k === rangeEnd });
+                            data.forEach(item => { if (MEAL_TIMES.some(t => item[t])) n[item.date] = { marked: true, selected: item.date === rangeStart || item.date === rangeEnd }; });
+                            return n;
+                        });
+                    }
+                };
+                if (showShoppingList) fetchShopMonthPlans();
+            }, [shopMonth, showShoppingList, rangeStart, rangeEnd]);
+
+            return (
+                <div style={styles.container}>
+                    <div style={styles.headerRow}>
+                        <h1 style={styles.title}>PLANIFICADOR NUTRICIONAL</h1>
+                        <button style={styles.logoutBtn} onClick={() => supabase.auth.signOut()}>Salir</button>
+                    </div>
+                    {renderCalendar(currentMonth, setCurrentMonth, markedDates, onDayPress)}
+
+                    {selectedDate !== '' && (
+                        <div style={styles.dayContainer}>
+                            <h2 style={styles.subtitle}>Comidas para el {formatSpanishDate(selectedDate)}</h2>
+                            <div>
+                                {MEAL_TIMES.map(time => (
+                                    <div key={time} style={styles.mealTimeBox}>
+                                        <span style={styles.mealTimeText}>{MEAL_LABELS[time]}:</span>
+                                        <div style={styles.mealRightSide}>
+                                            <button style={styles.mealNameBtn} onClick={() => {
+                                                if (dayPlan[time]) { setCurrentMealInfo(mealsDB.find(m => m.id === dayPlan[time])); setShowMealInfo(true); }
+                                                else { setActiveMealTime(time); setShowMealSelector(true); }
+                                            }}>
+                                                <span style={styles.mealNameText} title={dayPlan[time] ? mealsDB.find(m => m.id === dayPlan[time])?.name : "Añadir +"}>{dayPlan[time] ? mealsDB.find(m => m.id === dayPlan[time])?.name : "Añadir +"}</span>
+                                            </button>
+                                            {dayPlan[time] && <button style={styles.removeBtn} onClick={() => removeMealFromDay(time)}>✕</button>}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <button style={styles.btnMain} onClick={() => setShowShoppingList(true)}>Generar Lista de Compra (Rango)</button>
+                        </div>
+                    )}
+
+                    {showMealSelector && (
+                        <div className="modal-overlay" onClick={() => setShowMealSelector(false)}>
+                            <div className="modal-content" onClick={e => e.stopPropagation()}>
+                                <h2 style={styles.subtitle}>Elegir comida para: {MEAL_LABELS[activeMealTime]}</h2>
+                                <div style={{marginBottom: 20}}>
+                                    {mealsDB.filter(m => !m.suitable_times || m.suitable_times.length === 0 || m.suitable_times.includes(activeMealTime)).map(item => (
+                                        <button key={item.id} style={styles.listItem} onClick={async () => {
+                                            let uP = { ...dayPlan, [activeMealTime]: item.id, date: selectedDate };
+                                            const { error } = await supabase.from('planner').upsert(uP);
+                                            if (error) alert("Error: " + error.message);
+                                            else { setDayPlan(uP); setMarkedDates(prev => ({ ...prev, [selectedDate]: { selected: true, marked: true } })); setShowMealSelector(false); }
+                                        }}><span style={styles.listItemText}>{item.name}</span></button>
+                                    ))}
+                                </div>
+                                <button style={styles.btnMain} onClick={() => { setShowMealSelector(false); setShowAddMeal(true); }}>Añadir Nueva Comida</button>
+                                <button style={{...styles.btnSecondary, background: '#f0f0f0', color: '#dc3545'}} onClick={() => setShowMealSelector(false)}>Cerrar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {showMealInfo && currentMealInfo && (
+                        <div className="modal-overlay" onClick={() => setShowMealInfo(false)}>
+                            <div className="modal-content" onClick={e => e.stopPropagation()}>
+                                <h2 style={styles.subtitle}>{currentMealInfo.name}</h2>
+                                <h3 style={styles.sectionTitle}>Ingredientes:</h3>
+                                {currentMealInfo.ingredients.map((ing, i) => <div key={i}>- {ing.name} ({ing.quantity}{ing.unit})</div>)}
+                                <h3 style={styles.sectionTitle}>Preparación:</h3>
+                                <div style={{marginBottom: 10}}>{currentMealInfo.preparation}</div>
+                                <h3 style={styles.sectionTitle}>Información Nutricional (Promedio):</h3>
+                                <div>Calorías: {currentMealInfo.nutrition?.calories} kcal</div>
+                                <div>Proteínas: {currentMealInfo.nutrition?.protein}g | Carbs: {currentMealInfo.nutrition?.carbs}g | Grasas: {currentMealInfo.nutrition?.fat}g</div>
+                                <h3 style={styles.sectionTitle}>Índice y Carga Glucémica:</h3>
+                                <div>IG: {currentMealInfo.glycemic_index} | CG: {currentMealInfo.glycemic_load}</div>
+                                <button style={{...styles.btnMain, marginBottom: 20}} onClick={() => setShowMealInfo(false)}>Cerrar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {showAddMeal && (
+                        <div className="modal-overlay" onClick={() => setShowAddMeal(false)}>
+                            <div className="modal-content" onClick={e => e.stopPropagation()}>
+                                <AddMealForm activeMealTime={activeMealTime} onCancel={() => setShowAddMeal(false)} onSave={async (meal, sT) => { if (await saveMealAndAssign(meal, sT)) { alert("Guardado correctamente"); setShowAddMeal(false); } }} />
+                            </div>
+                        </div>
+                    )}
+
+                    {showShoppingList && (
+                        <div className="modal-overlay" onClick={() => setShowShoppingList(false)}>
+                            <div className="modal-content" onClick={e => e.stopPropagation()}>
+                                <h2 style={styles.subtitle}>Lista de la Compra</h2>
+                                {provisionalList.length === 0 && Object.keys(definitiveList).length === 0 && (
+                                    <>
+                                        <h3 style={styles.sectionTitle}>1. Selecciona el rango en el calendario:</h3>
+                                        {renderCalendar(shopMonth, setShopMonth, shopMarks, onShopDayPress, rangeStart, rangeEnd)}
+                                        <div style={{textAlign: 'center', marginTop: 10, fontSize: 14, color: '#333'}}>Inicio: {formatSpanishDate(rangeStart)} <br/> Fin: {formatSpanishDate(rangeEnd)}</div>
+                                        <button style={styles.btnMain} onClick={generateShoppingList}>{isGeneratingList ? <div className="spinner" style={{width:20, height:20, borderWidth:3, borderTopColor: 'white', borderLeftColor: 'rgba(255,255,255,0.3)'}}></div> : <span style={{color: 'white', fontWeight: 'bold'}}>Buscar y Clasificar con IA</span>}</button>
+                                    </>
+                                )}
+                                {provisionalList.length > 0 && Object.keys(definitiveList).length === 0 && (
+                                    <>
+                                        <h3 style={styles.sectionTitle}>2. Revisa y desmarca lo que ya tengas:</h3>
+                                        <div style={{marginBottom: 20, maxHeight: '400px', overflowY: 'auto'}}>
+                                            {provisionalList.map((item, index) => (
+                                                <button key={index} style={styles.provItem} onClick={() => toggleProvisionalItem(index)}>
+                                                    <div style={{...styles.checkbox, ...(item.selected && styles.checkboxChecked)}}></div>
+                                                    <span style={{...styles.provText, ...(!item.selected && styles.provTextUnselected)}}>{item.name} ({item.quantity} {item.unit}) - <i>{item.category}</i></span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <button style={styles.btnMain} onClick={createDefinitiveList}><span style={{color: 'white', fontWeight: 'bold'}}>Generar Lista Definitiva</span></button>
+                                    </>
+                                )}
+                                {Object.keys(definitiveList).length > 0 && (
+                                    <>
+                                        <h3 style={styles.sectionTitle}>Lista Definitiva (Toca para tachar):</h3>
+                                        <div style={{marginBottom: 20, maxHeight: '400px', overflowY: 'auto'}}>
+                                            {SHOPPING_CATEGORIES.map(cat => definitiveList[cat] && definitiveList[cat].length > 0 && (
+                                                <div key={cat} style={styles.defCat}>
+                                                    <div style={styles.defCatTitle}>{cat}</div>
+                                                    {definitiveList[cat].map((item, index) => (
+                                                        <button key={index} style={styles.defItem} onClick={() => toggleBoughtItem(cat, index)}>
+                                                            <span style={{...styles.defText, ...(item.bought && styles.defTextBought)}}>{item.bought ? "✔️" : "⬜"} {item.name}: {item.quantity} {item.unit}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button style={styles.btnWhatsapp} onClick={sendWhatsApp}><span style={{color: 'white', fontWeight: 'bold'}}>Enviar por WhatsApp</span></button>
+                                        <button style={styles.btnSecondary} onClick={exportListFile}><span style={{color: 'white', fontWeight: 'bold'}}>Descargar Archivo</span></button>
+                                    </>
+                                )}
+                                <button style={{...styles.btnSecondary, background: '#f0f0f0', color: '#dc3545', marginTop: 10}} onClick={() => { setShowShoppingList(false); setProvisionalList([]); setDefinitiveList({}); setRangeStart(''); setRangeEnd(''); }}>Cerrar y Reiniciar</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // --- FORMULARIO AÑADIR COMIDA ---
+        function AddMealForm({ onSave, activeMealTime, onCancel }) {
+            const [mode, setMode] = useState('manual');
+            const [searchQuery, setSearchQuery] = useState('');
+            const [isSearching, setIsSearching] = useState(false);
+            const [name, setName] = useState('');
+            const [ingredients, setIngredients] = useState('');
+            const [prep, setPrep] = useState('');
+            const [calories, setCalories] = useState('');
+            const [protein, setProtein] = useState('');
+            const [carbs, setCarbs] = useState('');
+            const [fat, setFat] = useState('');
+            const [ig, setIg] = useState('');
+            const [cg, setCg] = useState('');
+            const [selectedTimes, setSelectedTimes] = useState(activeMealTime ? [activeMealTime] : []);
+            const [suitableTimes, setSuitableTimes] = useState(activeMealTime ? [activeMealTime] : []);
+
+            const toggleTimeSelection = (time, array, setter) => array.includes(time) ? setter(array.filter(t => t !== time)) : setter([...array, time]);
+
+            const handleAISearch = async () => {
+                if (!searchQuery) return;
+                setIsSearching(true); setPrep("Procesando con IA...");
+                try {
+                    const prompt = mode === 'url' ? `Analiza esta URL: ${searchQuery}. Extrae nombre, ingredientes (separados por comas), preparación, y estima macronutrientes, IG y CG.` : `Crea una receta para: "${searchQuery}". Extrae nombre, ingredientes, preparación, y estima macronutrientes, IG y CG.`;
+                    const parsed = await callGemini(`Eres una IA nutricional. ${prompt} Devuelve JSON: {"name":"", "ingredients":"", "preparation":"", "calories":0, "protein":0, "carbs":0, "fat":0, "glycemic_index":0, "glycemic_load":0}`);
+                    setName(parsed.name || searchQuery); setIngredients(parsed.ingredients || ""); setPrep(parsed.preparation || "");
+                    setCalories(String(parsed.calories || 0)); setProtein(String(parsed.protein || 0)); setCarbs(String(parsed.carbs || 0)); setFat(String(parsed.fat || 0));
+                    setIg(String(parsed.glycemic_index || 0)); setCg(String(parsed.glycemic_load || 0));
+                    alert("Búsqueda completada.");
+                } catch (error) { setPrep(`ERROR: ${error.message}`); }
+                setIsSearching(false);
+            };
+
+            const handleSave = () => {
+                if (!name || selectedTimes.length === 0) { alert("Faltan datos."); return; }
+                const ingsArray = (ingredients.split(',') || [ingredients]).map(n => ({ name: n.trim(), quantity: "100", unit: "g" }));
+                onSave({ name, ingredients: ingsArray, preparation: prep || "Sin preparación", nutrition: { calories: parseInt(calories)||0, protein: parseInt(protein)||0, carbs: parseInt(carbs)||0, fat: parseInt(fat)||0 }, glycemic_index: parseInt(ig)||0, glycemic_load: parseInt(cg)||0, suitable_times: suitableTimes, source: mode === 'url' ? "ai_url" : "ai_search" }, selectedTimes);
+            };
+
+            return (
+                <div style={{paddingBottom: 40}}>
+                    <h2 style={styles.subtitle}>Añadir Comida</h2>
+                    <div style={styles.modeContainer}>
+                        <button style={{...styles.modeBtn, ...(mode === 'manual' && styles.modeBtnActive)}} onClick={() => setMode('manual')}>Manual</button>
+                        <button style={{...styles.modeBtn, ...(mode === 'url' && styles.modeBtnActive)}} onClick={() => setMode('url')}>URL</button>
+                        <button style={{...styles.modeBtn, ...(mode === 'search' && styles.modeBtnActive)}} onClick={() => setMode('search')}>Buscar IA</button>
+                    </div>
+                    {mode !== 'manual' && (
+                        <div style={styles.searchContainer}>
+                            <input style={{...styles.input, flex: 2}} placeholder={mode === 'url' ? "Pega URL..." : "Nombre o ingredientes..."} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                            <button style={{...styles.btnMain, flex: 1, margin: '0 0 0 5px'}} onClick={handleAISearch}>{isSearching ? <div className="spinner" style={{width:20, height:20, borderWidth:3, borderTopColor: 'white', borderLeftColor: 'rgba(255,255,255,0.3)'}}></div> : <span style={{color:'white', fontWeight:'bold'}}>Extraer</span>}</button>
+                        </div>
+                    )}
+                    <input style={styles.input} placeholder="Nombre de la comida" value={name} onChange={e => setName(e.target.value)} />
+                    <h3 style={styles.sectionTitle}>Ingredientes (separados por comas):</h3>
+                    <textarea style={{...styles.input, minHeight: 60}} placeholder="Ej: 200g pollo, 1 cebolla" value={ingredients} onChange={e => setIngredients(e.target.value)}></textarea>
+                    <textarea style={{...styles.input, minHeight: 80}} placeholder="Preparación" value={prep} onChange={e => setPrep(e.target.value)}></textarea>
+                    <h3 style={styles.sectionTitle}>Info Nutricional:</h3>
+                    <div style={styles.labeledRow}>
+                        <span style={styles.labelText}>Calorías:</span><input style={styles.labeledInput} type="number" value={calories} onChange={e => setCalories(e.target.value)} />
+                        <span style={styles.labelText}>Proteínas:</span><input style={styles.labeledInput} type="number" value={protein} onChange={e => setProtein(e.target.value)} />
+                    </div>
+                    <div style={styles.labeledRow}>
+                        <span style={styles.labelText}>Carbs:</span><input style={styles.labeledInput} type="number" value={carbs} onChange={e => setCarbs(e.target.value)} />
+                        <span style={styles.labelText}>Grasas:</span><input style={styles.labeledInput} type="number" value={fat} onChange={e => setFat(e.target.value)} />
+                    </div>
+                    <h3 style={styles.sectionTitle}>Índice y Carga Glucémica:</h3>
+                    <div style={styles.labeledRow}>
+                        <span style={styles.labelText}>IG:</span><input style={styles.labeledInput} type="number" value={ig} onChange={e => setIg(e.target.value)} />
+                        <span style={styles.labelText}>CG:</span><input style={styles.labeledInput} type="number" value={cg} onChange={e => setCg(e.target.value)} />
+                    </div>
+                    <h3 style={styles.sectionTitle}>Esta receta es apta para:</h3>
+                    <div style={styles.timesContainer}>
+                        {MEAL_TIMES.map(t => <button key={t} style={{...styles.timePill, ...(suitableTimes.includes(t) && styles.timePillActive)}} onClick={() => toggleTimeSelection(t, suitableTimes, setSuitableTimes)}>{MEAL_LABELS[t]}</button>)}
+                    </div>
+                    <h3 style={styles.sectionTitle}>Asignar a las comidas de hoy:</h3>
+                    <div style={styles.timesContainer}>
+                        {MEAL_TIMES.map(t => <button key={t} style={{...styles.timePill, ...(selectedTimes.includes(t) && styles.timePillActive)}} onClick={() => toggleTimeSelection(t, selectedTimes, setSelectedTimes)}>{MEAL_LABELS[t]}</button>)}
+                    </div>
+                    <button style={styles.btnMain} onClick={handleSave}><span style={{color:'white', fontWeight:'bold'}}>Guardar y Asignar</span></button>
+                    <button style={{...styles.btnSecondary, background: '#f0f0f0', marginTop: 10}} onClick={onCancel}><span style={{color: '#dc3545', fontWeight:'bold'}}>Cancelar</span></button>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
