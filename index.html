@@ -29,7 +29,12 @@
         // --- CONFIGURACIÓN SUPABASE ---
         const supabaseUrl = 'https://gfxfgpaueizbsvhslvfh.supabase.co';
         const supabaseKey = 'sb_publishable_Rxmh-0-9SmdQoshPKaq8s5g_AZcw_TgL'; // Tu clave real
-        const supabase = createClient(supabaseUrl, supabaseKey);
+       const supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+        detectSessionInUrl: true,
+        persistSession: true
+    }
+});
 
         const MEAL_TIMES = ["desayuno", "media_manana", "almuerzo", "media_tarde", "cena"];
         const MEAL_LABELS = {
