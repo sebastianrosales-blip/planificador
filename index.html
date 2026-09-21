@@ -29,12 +29,7 @@
         // --- CONFIGURACIÓN SUPABASE ---
         const supabaseUrl = 'https://gfxfgpaueizbsvhslvfh.supabase.co';
         const supabaseKey = 'sb_publishable_Rxmh-0-9SmdQoshPKaq8s5g_AZcw_TgL'; // Tu clave real
-       const supabase = createClient(supabaseUrl, supabaseKey, {
-    auth: {
-        detectSessionInUrl: true,
-        persistSession: true
-    }
-});
+        const supabase = createClient(supabaseUrl, supabaseKey);
 
         const MEAL_TIMES = ["desayuno", "media_manana", "almuerzo", "media_tarde", "cena"];
         const MEAL_LABELS = {
@@ -52,7 +47,7 @@
         };
 
         const callGemini = async (prompt) => {
-            const GEMINI_API_KEY = "AQ.Ab8RN6I4-p0LO_7MSk3rXN97_uIOhSLUsYbp1uNEz5msXJJEVg"; // ¡Pon aquí tu clave nueva de Gemini!
+            const GEMINI_API_KEY = "AQ.Ab8RN6I4-p0LO_7MSk3rXN97_uIOhSLUsYbp1uNEz5msXJJEVg"; // ¡Pon aquí tu nueva clave de Gemini!
             const body = {
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: { responseMimeType: "application/json" }
@@ -78,9 +73,8 @@
         // --- ESTILOS (Inline) ---
         const styles = {
             container: { flex: 1, backgroundColor: '#f5f5f5', paddingTop: 30 },
-            headerRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 20px', marginTop: 10 },
-            title: { fontSize: 22, fontWeight: 'bold', flex: 1 },
-            logoutBtn: { color: '#dc3545', fontWeight: 'bold', fontSize: 16, background: 'none' },
+            headerRow: { display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '0 20px', marginTop: 10 },
+            title: { fontSize: 22, fontWeight: 'bold', textAlign: 'center' },
             calendarContainer: { backgroundColor: 'white', margin: 10, borderRadius: 10, padding: 10, boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
             calendarHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
             monthTitle: { fontSize: 18, fontWeight: 'bold', textTransform: 'capitalize' },
@@ -130,62 +124,15 @@
             defCatTitle: { fontSize: 16, fontWeight: 'bold', backgroundColor: '#f0f0f0', padding: 8, borderRadius: 5 },
             defItem: { padding: '10px 0 10px 10px', background: 'none', width: '100%', textAlign: 'left' },
             defText: { fontSize: 16 },
-            defTextBought: { color: '#999', textDecoration: 'line-through' },
-            authContainer: { height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 30, backgroundColor: '#f5f5f5' },
-            authTitle: { fontSize: 28, fontWeight: 'bold', textAlign: 'center', marginBottom: 10, color: '#007BFF' },
-            authSubtitle: { fontSize: 16, textAlign: 'center', marginBottom: 40, color: '#555' },
-            googleBtn: { display: 'flex', alignItems: 'center', backgroundColor: 'white', padding: '12px 20px', borderRadius: 30, border: '1px solid #ccc', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
-            googleIcon: { width: 24, height: 24, marginRight: 10 }
+            defTextBought: { color: '#999', textDecoration: 'line-through' }
         };
 
-        // --- PANTALLA LOGIN ---
-        const AuthScreen = () => {
-            const [loading, setLoading] = useState(false);
-            const handleGoogleLogin = async () => {
-                setLoading(true);
-                try {
-                    const { error } = await supabase.auth.signInWithOAuth({
-                        provider: 'google',
-                        options: { redirectTo: 'https://sebastianrosales-blip.github.io/planificador/' }
-                    });
-                    if (error) throw error;
-                } catch (error) { alert("Error: " + error.message); setLoading(false); }
-            };
-            return (
-                <div style={styles.authContainer}>
-                    <h1 style={styles.authTitle}>PLANIFICADOR NUTRICIONAL</h1>
-                    <p style={styles.authSubtitle}>Inicia sesión para acceder a tus recetas y calendario</p>
-                    <button style={styles.googleBtn} onClick={handleGoogleLogin} disabled={loading}>
-                        {loading ? <div className="spinner" style={{width:24, height:24, borderWidth:3}}></div> : (
-                            <>
-                                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/2048px-Google_%22G%22_logo.svg.png" style={styles.googleIcon} alt="Google" />
-                                <span style={{fontSize: 16, fontWeight: 'bold', color: '#333'}}>Continuar con Google</span>
-                            </>
-                        )}
-                    </button>
-                </div>
-            );
-        };
-
-        // --- APP PRINCIPAL ---
+        // --- APP PRINCIPAL (SIN LOGIN) ---
         function App() {
-            const [session, setSession] = useState(null);
-            const [loading, setLoading] = useState(true);
-
-            useEffect(() => {
-                supabase.auth.getSession().then(({ data: { session } }) => {
-                    setSession(session); setLoading(false);
-                });
-                const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
-                return () => listener.subscription.unsubscribe();
-            }, []);
-
-            if (loading) return <div className="spinner"></div>;
-            if (!session) return <AuthScreen />;
-            return <MainApp user={session.user} />;
+            return <MainApp />;
         }
 
-        function MainApp({ user }) {
+        function MainApp() {
             const [selectedDate, setSelectedDate] = useState('');
             const [markedDates, setMarkedDates] = useState({});
             const [dayPlan, setDayPlan] = useState({});
@@ -383,7 +330,6 @@
                 <div style={styles.container}>
                     <div style={styles.headerRow}>
                         <h1 style={styles.title}>PLANIFICADOR NUTRICIONAL</h1>
-                        <button style={styles.logoutBtn} onClick={() => supabase.auth.signOut()}>Salir</button>
                     </div>
                     {renderCalendar(currentMonth, setCurrentMonth, markedDates, onDayPress)}
 
