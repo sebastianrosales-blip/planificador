@@ -2,19 +2,19 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Planificador Nutricional</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
-        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; }
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; -webkit-tap-highlight-color: transparent; }
         #root { width: 100%; min-height: 100vh; }
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 100; }
         .modal-content { background: white; width: 100%; max-width: 500px; height: 100%; max-height: 100vh; box-shadow: 0 4px 6px rgba(0,0,0,0.1); overflow-y: auto; box-sizing: border-box; padding: 20px; }
         @media (min-width: 768px) { .modal-content { border-radius: 10px; height: 90vh; } }
-        input, textarea { width: 100%; box-sizing: border-box; font-family: inherit; }
+        input, textarea { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 16px; }
         button { cursor: pointer; border: none; outline: none; font-family: inherit; }
         .spinner { border: 4px solid rgba(0,0,0,0.1); width: 40px; height: 40px; border-radius: 50%; border-left-color: #007BFF; animation: spin 1s linear infinite; margin: 20px auto;}
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -28,8 +28,11 @@
 
         // --- CONFIGURACIÓN SUPABASE ---
         const supabaseUrl = 'https://gfxfgpaueizbsvhslvfh.supabase.co';
-        const supabaseKey = 'sb_publishable_Rxmh-0-9SmdQoshPKaq8s5g_AZcw_TgL'; // Tu clave real
+        const supabaseKey = 'sb_publishable_Rxmh-0-9SmdQoshPKaq8s5g_AZcw_TgL';
         const supabase = createClient(supabaseUrl, supabaseKey);
+
+        // --- CONFIGURACIÓN GEMINI ---
+        const GEMINI_API_KEY = "AQ.Ab8RN6IIFU94H_WeQEtDCPGgESnYPLTJB_e2yTGDzVATaacORg"; // ¡PEGA AQUÍ TU CLAVE NUEVA!
 
         const MEAL_TIMES = ["desayuno", "media_manana", "almuerzo", "media_tarde", "cena"];
         const MEAL_LABELS = {
@@ -47,7 +50,6 @@
         };
 
         const callGemini = async (prompt) => {
-            const GEMINI_API_KEY = "AQ.Ab8RN6I4-p0LO_7MSk3rXN97_uIOhSLUsYbp1uNEz5msXJJEVg"; // ¡Pon aquí tu nueva clave de Gemini!
             const body = {
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: { responseMimeType: "application/json" }
@@ -153,7 +155,12 @@
             const [shopMarks, setShopMarks] = useState({});
 
             useEffect(() => {
-                const fetchMeals = async () => { const { data } = await supabase.from('meals').select('*'); if (data) setMealsDB(data); };
+                const fetchMeals = async () => {
+                    // Mostramos alertas si hay errores para que sepas qué pasa
+                    const { data, error } = await supabase.from('meals').select('*');
+                    if (error) alert("Error al cargar comidas: " + error.message);
+                    if (data) setMealsDB(data);
+                };
                 fetchMeals();
             }, []);
 
@@ -193,16 +200,16 @@
             const saveMealAndAssign = async (newMeal, selectedTimes) => {
                 try {
                     const { data: mealData, error: mealError } = await supabase.from('meals').insert(newMeal).select();
-                    if (mealError) { alert("Error: " + mealError.message); return false; }
+                    if (mealError) { alert("Error al guardar: " + mealError.message); return false; }
                     setMealsDB(prev => [...prev, mealData[0]]);
                     let updatedPlan = { ...dayPlan, date: selectedDate };
                     selectedTimes.forEach(t => updatedPlan[t] = mealData[0].id);
                     const { error: planError } = await supabase.from('planner').upsert(updatedPlan);
-                    if (planError) { alert("Error: " + planError.message); return false; }
+                    if (planError) { alert("Error al asignar: " + planError.message); return false; }
                     setDayPlan(updatedPlan);
                     setMarkedDates(prev => ({ ...prev, [selectedDate]: { ...prev[selectedDate], selected: true, marked: true } }));
                     return true;
-                } catch (e) { alert("Error: " + e.message); return false; }
+                } catch (e) { alert("Error Inesperado: " + e.message); return false; }
             };
 
             const removeMealFromDay = async (time) => {
@@ -231,7 +238,7 @@
                     const prompt = `Eres un asistente de supermercado. Lista de ingredientes: ${JSON.stringify(rawIngredients)}. 1. Consolida duplicados (plurales/sinónimos). 2. Suma cantidades. 3. Clasifica en: ["Carnes", "Pescados", "Lacteos", "Frutas", "Verduras", "Cereales", "Despensa", "Otros"]. 4. Devuelve array JSON: [{"name":"Tomate", "quantity":300, "unit":"g", "category":"Verduras"}]`;
                     const parsedArray = await callGemini(prompt);
                     setProvisionalList(parsedArray.map(item => ({ ...item, selected: true })));
-                } catch (e) { alert("Error IA."); }
+                } catch (e) { alert("Error IA: " + e.message); }
                 setIsGeneratingList(false);
             };
 
@@ -305,7 +312,7 @@
                 else if (rangeStart && !rangeEnd) { if (new Date(day) >= new Date(rangeStart)) ne = day; else ns = day; }
                 setRangeStart(ns); setRangeEnd(ne); setProvisionalList([]); setDefinitiveList({});
                 setShopMarks(prev => {
-                    const n = {}; Object.keys(prev).forEach(k => n[k] = { marked: prev[k]?.marked, selected: false });
+                    const n = {}; Object.keys(prev).forEach(k => n[k] = { marked: prev[k]?.marked, selected: false };
                     if (ns) n[ns] = { ...n[ns], selected: true }; if (ne) n[ne] = { ...n[ne], selected: true }; return n;
                 });
             };
@@ -317,7 +324,7 @@
                     const { data } = await supabase.from('planner').select('*').gte('date', sD).lte('date', eD);
                     if (data) {
                         setShopMarks(prev => {
-                            const n = {}; Object.keys(prev).forEach(k => n[k] = { marked: false, selected: k === rangeStart || k === rangeEnd });
+                            const n = {}; Object.keys(prev).forEach(k => n[k] = { marked: false, selected: k === rangeStart || k === rangeEnd };
                             data.forEach(item => { if (MEAL_TIMES.some(t => item[t])) n[item.date] = { marked: true, selected: item.date === rangeStart || item.date === rangeEnd }; });
                             return n;
                         });
